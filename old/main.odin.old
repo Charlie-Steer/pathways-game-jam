@@ -1,0 +1,161 @@
+package main
+
+import "core:fmt"
+import "core:math/linalg"
+import rl "vendor:raylib"
+
+vector2 :: [2]f32
+win_width: i32 = 800
+win_height: i32 = 600
+win_dimensions := vector2{f32(win_width), f32(win_height)}
+
+Node :: struct {
+	id:               i64,
+	position:         vector2,
+	is_pulse_emitter: bool,
+	links:            [dynamic]^Node,
+}
+
+link_len: f32 = 100
+
+all_nodes := make([dynamic]Node, 0, 64)
+
+last_id: i64 // WARN: Would Crash at some point with this crude solution.
+
+main :: proc() {
+	rl.InitWindow(win_width, win_height, "Pathways")
+	// WARN: Set a sensible default.
+	// rl.SetWindowPosition(1064, 42)
+	rl.SetWindowPosition(1924, 64)
+	// rl.SetWindowMonitor(1)
+	defer rl.CloseWindow()
+	rl.SetTargetFPS(30) // WARN: Change to 60
+
+	last_node_created: Node
+	for !rl.WindowShouldClose() {
+		rl.BeginDrawing()
+
+		rl.ClearBackground(rl.GRAY)
+		draw_ui()
+
+		mouse_position := rl.GetMousePosition()
+
+		if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+			last_node_created = create_node(mouse_position)
+			// fmt.println("all_nodes:", all_nodes)
+			// fmt.println("last_node_created", last_node_created)
+			fmt.println("all_nodes:", len(all_nodes))
+		}
+
+		for node in all_nodes {
+			// Draw node
+			rl.DrawCircleV(node.position, 12, rl.GREEN)
+			// Draw temp axon
+			displacement_vector := node.position - mouse_position
+			if linalg.vector_length2(displacement_vector) <= f32(link_len * link_len) {
+				rl.DrawLineV(mouse_position, node.position, rl.RED)
+			}
+			// Draw fixed axons
+			for node2 in all_nodes {
+				displacement_vector = node.position - node2.position
+				if linalg.vector_length2(displacement_vector) <= f32(link_len * link_len) {
+					rl.DrawLineV(node.position, node2.position, rl.GREEN)
+				}
+			}
+		}
+
+		// nodes_checklist: [dynamic]Node = new_clone(all_nodes, context.temp_allocator)^
+		nodes_checklist := make_dynamic_array_len_cap(
+			[dynamic]^Node,
+			len(all_nodes),
+			cap(all_nodes),
+			context.temp_allocator,
+		)
+		// copy_slice((&nodes_checklist)[:], &(all_nodes[:]))
+		for n, i in all_nodes {
+			nodes_checklist[i] = &all_nodes[i]
+		}
+		// fmt.println("LAST_NODE_CREATED_NODE_ID:", last_node_created.id)
+		if (last_node_created.id > 0) { 	// WARN: Careful with the index
+			draw_tree(&last_node_created, &nodes_checklist)
+		}
+		fmt.println("CHECKLIST POST:", len(nodes_checklist))
+
+		rl.EndDrawing()
+		free_all(context.temp_allocator)
+	}
+}
+
+// NOTE: There is likely a more performant solution.
+get_index_of_node :: proc(node: Node) -> (index: int) {
+	for node2, idx in all_nodes {
+		// fmt.println("node1_id:", node.id, "| node2_id:", node.id)
+		if node.id == node2.id {
+			return idx
+		}
+	}
+	return -1
+}
+
+get_index_of_node2 :: proc(list: [dynamic]^Node, node: ^Node) -> (index: int) {
+	for n, index in list {
+		if n.id == node.id {
+			return index
+		}
+	}
+	return -1
+}
+
+draw_tree :: proc(base_node: ^Node, nodes_checklist: ^[dynamic]^Node) {
+	rl.DrawCircleV(base_node.position, 12, rl.BLUE)
+	for &node in base_node.links {
+		index := get_index_of_node2(nodes_checklist^, node)
+		fmt.println("CHECKLIST:", len(nodes_checklist))
+		if index != -1 {
+			// fmt.println("NODES FOUND:", nodes_found)
+			// fmt.println("HEY!")
+			unordered_remove(nodes_checklist, index)
+			draw_tree(node, nodes_checklist)
+		}
+	}
+}
+
+draw_ui :: proc() {
+	rl.DrawRectangleV(
+		{0, win_dimensions.y / 2},
+		{win_dimensions.x, win_dimensions.y / 2},
+		rl.DARKGRAY,
+	)
+}
+
+get_nodes_in_range :: proc(node: Node, distance: f32) -> [dynamic]^Node {
+	nodes := make_dynamic_array_len_cap([dynamic]^Node, 0, 8, allocator = context.temp_allocator)
+	for &node2 in all_nodes {
+		displacement_vector := node2.position - node.position
+		if linalg.vector_length2(displacement_vector) <= f32(link_len * link_len) {
+			append_elem(&nodes, &node2)
+		}
+	}
+	fmt.println("nodes_in_range:", len(nodes))
+	return nodes
+}
+
+create_node :: proc(position: vector2, is_pulse_emitter := false) -> Node {
+	last_id += 1
+	node := Node {
+		id               = last_id,
+		position         = position,
+		is_pulse_emitter = is_pulse_emitter,
+	}
+	node.links = get_nodes_in_range(node, link_len)
+
+	// Add this node to the other's links.
+	for &n, i in node.links {
+		append_elem(&n.links, &node)
+	}
+
+	append_elem(&all_nodes, node)
+	fmt.println("NODE_ID:", node.id)
+
+	return node
+}
